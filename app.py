@@ -22,7 +22,7 @@ HEADERS = {
 }
 
 BASE_URL = "https://oyster-app-4xkwy.ondigitalocean.app"
-NGINX_URL = "https://ts.yedeklinksa35.workers.dev"
+WORKERS_URL = "https://ts.yedeklinksa35.workers.dev"
 
 
 def normalize_edge(url):
@@ -54,37 +54,44 @@ def get_m3u8_url(videoid):
 
 
 def fix_m3u8(tsal, videoid, m3u8_url):
-    base = NGINX_URL + '/ott-seg/' + videoid + '/'
-
-    # Base URL'i m3u8 URL'inden çıkar (token dahil)
-    # Örn: https://edge10.xmediaget.com/hls-live/19305025/1/
+    base = WORKERS_URL + '/ott-seg/' + videoid + '/'
     base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
 
     lines = tsal.split('\n')
     result = []
     for line in lines:
-        line = line.strip()
-        if line and not line.startswith('#'):
-            # Segment satırı — tam URL veya göreceli olabilir
-            if line.startswith('http'):
-                filename = line.split('/')[-1].split('?')[0]
-                query = '?' + line.split('?')[1] if '?' in line else ''
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            if stripped.startswith('http'):
+                filename = stripped.split('/')[-1].split('?')[0]
+                query = '?' + stripped.split('?')[1] if '?' in stripped else ''
             else:
-                filename = line.split('?')[0]
-                query = '?' + line.split('?')[1] if '?' in line else ''
-                line = base_source + line  # tam URL yap
-                query = '?' + line.split('?')[1] if '?' in line else ''
-                filename = line.split('/')[-1].split('?')[0]
-
-            # .ts → .avif
+                full = base_source + stripped
+                filename = full.split('/')[-1].split('?')[0]
+                query = '?' + full.split('?')[1] if '?' in full else ''
             filename_avif = filename.replace('.ts', '.avif')
             result.append(base + filename_avif + query)
         else:
-            result.append(line)
+            result.append(stripped)
 
     return '\n'.join(result)
 
 
+# ── /ott/<videoid>.m3u8 ──
+@app.route('/ott/<videoid>.m3u8')
+def ott_m3u8(videoid):
+    try:
+        m3u8_url = get_m3u8_url(videoid)
+        if not m3u8_url:
+            return "Veri yok", 404
+        ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
+        tsal = fix_m3u8(ts.text, videoid, m3u8_url)
+        return Response(tsal, content_type='application/vnd.apple.mpegurl')
+    except Exception as e:
+        return str(e), 500
+
+
+# ── /ott/<videoid> ──
 @app.route('/ott/<videoid>')
 def ott(videoid):
     try:
@@ -98,6 +105,7 @@ def ott(videoid):
         return str(e), 500
 
 
+# ── Chunk proxy ──
 @app.route('/ott-seg/<videoid>/<filename>')
 def ott_seg(videoid, filename):
     filename = filename.replace('.avif', '.ts')
@@ -112,8 +120,13 @@ def ott_seg(videoid, filename):
         return str(e), 500
 
 
+# ── Eski route — geriye dönük uyumluluk ──
 @app.route('/<path:m3u8>')
 def index(m3u8):
+    # ott ve ott-seg route'larını buraya düşürme
+    if m3u8.startswith('ott/') or m3u8.startswith('ott-seg/'):
+        return "not found", 404
+
     source = request.url.replace('__', '/')
     source = source.replace(BASE_URL + '/', '')
     source = source.replace('%2F', '/')

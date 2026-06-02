@@ -57,6 +57,13 @@ def fix_m3u8(tsal, videoid, m3u8_url):
     base = WORKERS_URL + '/ott-seg/' + videoid + '/'
     base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
 
+    # TARGETDURATION'i en büyük EXTINF'ten buyuk yap (iOS uyumu)
+    extinf_values = re.findall(r'#EXTINF:([\d.]+)', tsal)
+    if extinf_values:
+        max_dur = max(float(v) for v in extinf_values)
+        new_target = int(max_dur) + 1
+        tsal = re.sub(r'#EXT-X-TARGETDURATION:\d+', f'#EXT-X-TARGETDURATION:{new_target}', tsal)
+
     lines = tsal.split('\n')
     result = []
     for line in lines:
@@ -77,7 +84,6 @@ def fix_m3u8(tsal, videoid, m3u8_url):
     return '\n'.join(result)
 
 
-# ── /ott/<videoid>.m3u8 ──
 @app.route('/ott/<videoid>.m3u8')
 def ott_m3u8(videoid):
     try:
@@ -91,7 +97,6 @@ def ott_m3u8(videoid):
         return str(e), 500
 
 
-# ── /ott/<videoid> ──
 @app.route('/ott/<videoid>')
 def ott(videoid):
     try:
@@ -105,7 +110,6 @@ def ott(videoid):
         return str(e), 500
 
 
-# ── Chunk proxy — <path:filename> nokta destekler ──
 @app.route('/ott-seg/<videoid>/<path:filename>')
 def ott_seg(videoid, filename):
     filename = filename.replace('.avif', '.ts')
@@ -148,7 +152,6 @@ def getstream():
     return "param hatali", 400
 
 
-# ── Eski route — en sonda, diğerlerini yakalamasın ──
 @app.route('/<path:m3u8>')
 def index(m3u8):
     source = request.url.replace('__', '/')

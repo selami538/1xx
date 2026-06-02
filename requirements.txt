@@ -1,0 +1,7 @@
+Flask
+gunicorn
+gevent
+requests
+regex
+flask_cors
+asyncio

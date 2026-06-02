@@ -22,7 +22,7 @@ HEADERS = {
 }
 
 BASE_URL = "https://oyster-app-4xkwy.ondigitalocean.app"
-NGINX_URL = "https://corestream.ronaldovurdu.help"
+NGINX_URL = "https://ts.yedeklinksa35.workers.dev"
 
 
 def normalize_edge(url):

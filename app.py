@@ -105,8 +105,8 @@ def ott(videoid):
         return str(e), 500
 
 
-# ── Chunk proxy ──
-@app.route('/ott-seg/<videoid>/<filename>')
+# ── Chunk proxy — <path:filename> nokta destekler ──
+@app.route('/ott-seg/<videoid>/<path:filename>')
 def ott_seg(videoid, filename):
     filename = filename.replace('.avif', '.ts')
     query = request.query_string.decode()
@@ -116,26 +116,6 @@ def ott_seg(videoid, filename):
     try:
         ts = requests.get(source, headers=HEADERS, timeout=10)
         return Response(ts.content, content_type=ts.headers.get('Content-Type', 'video/mp2t'))
-    except Exception as e:
-        return str(e), 500
-
-
-# ── Eski route — geriye dönük uyumluluk ──
-@app.route('/<path:m3u8>')
-def index(m3u8):
-    # ott ve ott-seg route'larını buraya düşürme
-    if m3u8.startswith('ott/') or m3u8.startswith('ott-seg/'):
-        return "not found", 404
-
-    source = request.url.replace('__', '/')
-    source = source.replace(BASE_URL + '/', '')
-    source = source.replace('%2F', '/')
-    source = source.replace('%3F', '?')
-    videoid = request.args.get("videoid", "")
-    try:
-        ts = requests.get(source, headers=HEADERS, timeout=10)
-        tsal = fix_m3u8(ts.text, videoid, source)
-        return Response(tsal, content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500
 
@@ -166,6 +146,22 @@ def getstream():
             return str(e), 500
 
     return "param hatali", 400
+
+
+# ── Eski route — en sonda, diğerlerini yakalamasın ──
+@app.route('/<path:m3u8>')
+def index(m3u8):
+    source = request.url.replace('__', '/')
+    source = source.replace(BASE_URL + '/', '')
+    source = source.replace('%2F', '/')
+    source = source.replace('%3F', '?')
+    videoid = request.args.get("videoid", "")
+    try:
+        ts = requests.get(source, headers=HEADERS, timeout=10)
+        tsal = fix_m3u8(ts.text, videoid, source)
+        return Response(tsal, content_type='application/vnd.apple.mpegurl')
+    except Exception as e:
+        return str(e), 500
 
 
 if __name__ == '__main__':

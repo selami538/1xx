@@ -25,6 +25,72 @@ BASE_URL = "https://oyster-app-4xkwy.ondigitalocean.app"
 NGINX_URL = "https://corestream.ronaldovurdu.help"
 
 
+def get_m3u8_url(videoid):
+    veriler = {
+        "AppId": "3",
+        "AppVer": "1025",
+        "VpcVer": "1.0.11",
+        "Language": "tr",
+        "Token": "",
+        "VideoId": videoid
+    }
+    r = requests.post("https://1xlite-26316.pro/cinema", json=veriler, timeout=10)
+    if "FullscreenAllowed" not in r.text:
+        return None
+    veri = r.text
+    veri = re.findall('"URL":"(.*?)"', veri)
+    if not veri:
+        return None
+    veri = veri[0].replace("\\/", "/")
+    for edge in ['edge100', 'edge3', 'edge4', 'edge2', 'edge5', 'edge6', 'edge7']:
+        veri = veri.replace(edge, 'edge10')
+    veri = veri.replace('edge1', 'edge10')
+    veri = veri.replace(':43434', '')
+    if "m3u8" not in veri:
+        return None
+    return veri
+
+
+def fix_m3u8(tsal, videoid):
+    tsal = tsal.replace(
+        videoid + '_',
+        NGINX_URL + '/ott-seg/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/' + videoid + '_'
+    )
+    if "internal" in tsal:
+        tsal = tsal.replace(
+            'internal',
+            NGINX_URL + '/ott-seg/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/internal'
+        )
+    if "segment" in tsal or "media" in tsal:
+        tsal = tsal.replace(
+            '\nmedia',
+            '\n' + NGINX_URL + '/ott-seg/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/media'
+        )
+    return tsal
+
+
+# ──────────────────────────────────────────
+# YENİ: Nginx'ten direkt video ID ile çağır
+# Kullanım: /ott/19303019
+# ──────────────────────────────────────────
+@app.route('/ott/<videoid>')
+def ott(videoid):
+    try:
+        m3u8_url = get_m3u8_url(videoid)
+        if not m3u8_url:
+            return "Veri yok", 404
+
+        ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
+        tsal = ts.text
+        tsal = fix_m3u8(tsal, videoid)
+        return Response(tsal, content_type='application/vnd.apple.mpegurl')
+    except Exception as e:
+        return str(e), 500
+
+
+# ──────────────────────────────────────────
+# Eski route — geriye dönük uyumluluk
+# ──────────────────────────────────────────
 @app.route('/<path:m3u8>')
 def index(m3u8):
     source = request.url.replace('__', '/')
@@ -37,49 +103,10 @@ def index(m3u8):
     try:
         ts = requests.get(source, headers=HEADERS, timeout=10)
         tsal = ts.text
+        tsal = fix_m3u8(tsal, videoid)
+        return Response(tsal, content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500
-
-    # Chunk URL'lerini nginx üzerinden ver
-    tsal = tsal.replace(
-        videoid + '_',
-        NGINX_URL + '/ott-seg/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/' + videoid + '_'
-    )
-    if "internal" in tsal:
-        tsal = tsal.replace(
-            'internal',
-            NGINX_URL + '/ott-seg/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/internal'
-        )
-    if "segment" in tsal:
-        tsal = tsal.replace(
-            '\n' + 'media',
-            '\n' + NGINX_URL + '/ott-seg/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/media'
-        )
-
-    return Response(tsal, content_type='application/vnd.apple.mpegurl')
-
-
-@app.route('/getm3u8', methods=['GET'])
-def getm3u8():
-    source = request.url
-    source = source.replace(BASE_URL + '/getm3u8?source=', '')
-    source = source.replace('%2F', '/')
-    source = source.replace('%3F', '?')
-
-    videoid = request.args.get("videoid", "")
-
-    try:
-        ts = requests.get(source, headers=HEADERS, timeout=10)
-        tsal = ts.text
-    except Exception as e:
-        return str(e), 500
-
-    tsal = tsal.replace(
-        videoid + '_',
-        NGINX_URL + '/ott-seg/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/' + videoid + '_'
-    )
-
-    return Response(tsal, content_type='application/vnd.apple.mpegurl')
 
 
 @app.route('/getstream', methods=['GET'])
@@ -91,7 +118,6 @@ def getstream():
         source = source.replace(BASE_URL + '/getstream?param=getts&source=', '')
         source = source.replace('%2F', '/')
         source = source.replace('%3F', '?')
-
         try:
             ts = requests.get(source, headers=HEADERS, timeout=10)
             return Response(ts.content, content_type=ts.headers.get('Content-Type', 'video/mp2t'))
@@ -100,34 +126,15 @@ def getstream():
 
     if param == "getm3u8":
         videoid = request.args.get("videoid", "")
-        veriler = {
-            "AppId": "3",
-            "AppVer": "1025",
-            "VpcVer": "1.0.11",
-            "Language": "tr",
-            "Token": "",
-            "VideoId": videoid
-        }
-
         try:
-            r = requests.post("https://1xlite-26316.pro/cinema", json=veriler, timeout=10)
+            m3u8_url = get_m3u8_url(videoid)
+            if not m3u8_url:
+                return "Veri yok", 404
+            return BASE_URL + "/" + m3u8_url.replace("/", "__") + '&videoid=' + videoid
         except Exception as e:
             return str(e), 500
 
-        if "FullscreenAllowed" in r.text:
-            veri = r.text
-            veri = re.findall('"URL":"(.*?)"', veri)
-            if not veri:
-                return "URL bulunamadi", 404
-            veri = veri[0].replace("\\/", "__")
-            for edge in ['edge3', 'edge4', 'edge2', 'edge5', 'edge6', 'edge7']:
-                veri = veri.replace(edge, 'edge10')
-            veri = veri.replace('edge1', 'edge10')
-            veri = veri.replace('edge100', 'edge10')
-            veri = veri.replace(':43434', '')
-            if "m3u8" in veri:
-                return BASE_URL + "/" + veri + '&videoid=' + videoid
-        return "Veri yok", 404
+    return "param hatali", 400
 
 
 if __name__ == '__main__':

@@ -54,10 +54,9 @@ def get_m3u8_url(videoid):
 
 
 def fix_m3u8(tsal, videoid):
-    # Chunk URL'leri nginx/ott-seg üzerinden ver
-    # source parametresinde tam xmediaget URL'i var, token dahil
     base = NGINX_URL + '/ott-seg/' + videoid + '/'
     tsal = tsal.replace(videoid + '_', base + videoid + '_')
+    tsal = tsal.replace('.ts', '.avif')
     if "internal" in tsal:
         tsal = tsal.replace('internal', base + 'internal')
     if '\nmedia' in tsal:
@@ -81,7 +80,8 @@ def ott(videoid):
 # Chunk proxy — /ott-seg/<videoid>/<filename>?s=...&t=...
 @app.route('/ott-seg/<videoid>/<filename>')
 def ott_seg(videoid, filename):
-    # Token'ı query string'den al
+    # .avif → .ts (gerçek dosya adı)
+    filename = filename.replace('.avif', '.ts')
     query = request.query_string.decode()
     source = 'https://edge10.xmediaget.com/hls-live/' + videoid + '/1/' + filename
     if query:

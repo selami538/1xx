@@ -53,15 +53,36 @@ def get_m3u8_url(videoid):
     return veri
 
 
-def fix_m3u8(tsal, videoid):
+def fix_m3u8(tsal, videoid, m3u8_url):
     base = NGINX_URL + '/ott-seg/' + videoid + '/'
-    tsal = tsal.replace(videoid + '_', base + videoid + '_')
-    tsal = tsal.replace('.ts', '.avif')
-    if "internal" in tsal:
-        tsal = tsal.replace('internal', base + 'internal')
-    if '\nmedia' in tsal:
-        tsal = tsal.replace('\nmedia', '\n' + base + 'media')
-    return tsal
+
+    # Base URL'i m3u8 URL'inden çıkar (token dahil)
+    # Örn: https://edge10.xmediaget.com/hls-live/19305025/1/
+    base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
+
+    lines = tsal.split('\n')
+    result = []
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith('#'):
+            # Segment satırı — tam URL veya göreceli olabilir
+            if line.startswith('http'):
+                filename = line.split('/')[-1].split('?')[0]
+                query = '?' + line.split('?')[1] if '?' in line else ''
+            else:
+                filename = line.split('?')[0]
+                query = '?' + line.split('?')[1] if '?' in line else ''
+                line = base_source + line  # tam URL yap
+                query = '?' + line.split('?')[1] if '?' in line else ''
+                filename = line.split('/')[-1].split('?')[0]
+
+            # .ts → .avif
+            filename_avif = filename.replace('.ts', '.avif')
+            result.append(base + filename_avif + query)
+        else:
+            result.append(line)
+
+    return '\n'.join(result)
 
 
 @app.route('/ott/<videoid>')
@@ -71,7 +92,7 @@ def ott(videoid):
         if not m3u8_url:
             return "Veri yok", 404
         ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
-        tsal = fix_m3u8(ts.text, videoid)
+        tsal = fix_m3u8(ts.text, videoid, m3u8_url)
         return Response(tsal, content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500
@@ -100,7 +121,7 @@ def index(m3u8):
     videoid = request.args.get("videoid", "")
     try:
         ts = requests.get(source, headers=HEADERS, timeout=10)
-        tsal = fix_m3u8(ts.text, videoid)
+        tsal = fix_m3u8(ts.text, videoid, source)
         return Response(tsal, content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500

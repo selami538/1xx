@@ -40,7 +40,7 @@ def index(m3u8):
 @app.route('/getm3u8',methods=['GET'])
 def getm3u8():
     source = request.url
-    source = source.replace('https://lobster-app-7tul5.ondigitalocean.app/getm3u8?source=', '')
+    source = source.replace('https://lobster-app-7tul5.ondigitaloscean.app/getm3u8?source=', '')
     source = source.replace('%2F', '/')
     source = source.replace('%3F', '?')
     headers = {

@@ -9,7 +9,7 @@ CORS(app)
 def index(m3u8):
     m3u8 = request.url.replace('__','/')
     source = m3u8
-    source = source.replace('https://lobster-app-7tul5.ondigitalocean.app/', '')
+    source = source.replace('https://oyster-app-4xkwy.ondigitalocean.app/', '')
     source = source.replace('%2F', '/')
     source = source.replace('%3F', '?')
     videoid = request.args.get("videoid")
@@ -30,17 +30,17 @@ def index(m3u8):
     }
     ts = requests.get(source, headers=headers)
     tsal = ts.text
-    tsal = tsal.replace(videoid+'_','https://lobster-app-7tul5.ondigitalocean.app/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/'+videoid+'/1/'+videoid+'_')
+    tsal = tsal.replace(videoid+'_','https://oyster-app-4xkwy.ondigitalocean.app/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/'+videoid+'/1/'+videoid+'_')
     if "internal" in tsal:
-        tsal = tsal.replace('internal','https://lobster-app-7tul5.ondigitalocean.app/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/'+videoid+'/1/internal')
+        tsal = tsal.replace('internal','https://oyster-app-4xkwy.ondigitalocean.app/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/'+videoid+'/1/internal')
     if "segment" in tsal:
-        tsal = tsal.replace('\n'+'media','\n'+'https://lobster-app-7tul5.ondigitalocean.app/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/'+videoid+'/1/media')
+        tsal = tsal.replace('\n'+'media','\n'+'https://oyster-app-4xkwy.ondigitalocean.app/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/'+videoid+'/1/media')
     return tsal
 
 @app.route('/getm3u8',methods=['GET'])
 def getm3u8():
     source = request.url
-    source = source.replace('https://lobster-app-7tul5.ondigitaloscean.app/getm3u8?source=', '')
+    source = source.replace('https://oyster-app-4xkwy.ondigitalocean.app/getm3u8?source=', '')
     source = source.replace('%2F', '/')
     source = source.replace('%3F', '?')
     headers = {
@@ -59,7 +59,7 @@ def getm3u8():
     }
     ts = requests.get(source, headers=headers)
     tsal = ts.text
-    tsal = tsal.replace(videoid+'_','https://lobster-app-7tul5.ondigitalocean.app/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/'+videoid+'/1/'+videoid+'_')
+    tsal = tsal.replace(videoid+'_','https://oyster-app-4xkwy.ondigitalocean.app/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/'+videoid+'/1/'+videoid+'_')
     return tsal
 
 @app.route('/getstream',methods=['GET'])
@@ -67,7 +67,7 @@ def getstream():
     param = request.args.get("param")
     if param == "getts":
         source = request.url
-        source = source.replace('https://lobster-app-7tul5.ondigitalocean.app/getstream?param=getts&source=','')
+        source = source.replace('https://oyster-app-4xkwy.ondigitalocean.app/getstream?param=getts&source=','')
         source = source.replace('%2F','/')
         source = source.replace('%3F','?')
         headers = {
@@ -105,8 +105,8 @@ def getstream():
             veri = veri.replace(':43434','')
             veri = veri.replace('edge100','edge10')
             if "m3u8" in veri:
-                '''return "https://lobster-app-7tul5.ondigitalocean.app/getm3u8?source="+veri+'&videoid='+videoid'''
-                return "https://lobster-app-7tul5.ondigitalocean.app/"+veri+'&videoid='+videoid
+                '''return "https://oyster-app-4xkwy.ondigitalocean.app/getm3u8?source="+veri+'&videoid='+videoid'''
+                return "https://oyster-app-4xkwy.ondigitalocean.app/"+veri+'&videoid='+videoid
         else:
             return "Veri yok"
 

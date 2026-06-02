@@ -1,5 +1,6 @@
 import requests
 import re
+import time
 from flask import Flask, request, Response
 from flask_cors import CORS
 
@@ -64,23 +65,88 @@ def fix_m3u8(tsal, videoid):
     return tsal
 
 
+def get_segments(m3u8_text):
+    """M3U8'den segment satırlarını çıkar"""
+    segments = []
+    lines = m3u8_text.strip().split('\n')
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith('#EXTINF:'):
+            if i + 1 < len(lines):
+                segments.append((lines[i], lines[i+1]))
+                i += 2
+            else:
+                i += 1
+        else:
+            i += 1
+    return segments
+
+
+def merge_m3u8(m3u8_url, videoid, repeat=3):
+    """M3U8'i birkaç kez çekip birleştir — daha uzun playlist"""
+    seen = set()
+    all_segments = []
+    header = ""
+    seq = 0
+
+    for _ in range(repeat):
+        try:
+            r = requests.get(m3u8_url, headers=HEADERS, timeout=10)
+            text = r.text
+            lines = text.strip().split('\n')
+
+            # Header'ı ilk çekişte al
+            if not header:
+                for line in lines:
+                    if line.startswith('#EXTM3U') or \
+                       line.startswith('#EXT-X-VERSION') or \
+                       line.startswith('#EXT-X-TARGETDURATION'):
+                        header += line + '\n'
+                    if line.startswith('#EXT-X-MEDIA-SEQUENCE:'):
+                        seq = int(line.split(':')[1])
+
+            segs = get_segments(text)
+            for extinf, url in segs:
+                if url not in seen:
+                    seen.add(url)
+                    all_segments.append((extinf, url))
+
+            time.sleep(1)
+        except:
+            break
+
+    if not all_segments:
+        return None
+
+    result = header
+    result += f'#EXT-X-MEDIA-SEQUENCE:{seq}\n'
+    result += '#EXT-X-DISCONTINUITY-SEQUENCE:0\n'
+    for extinf, url in all_segments:
+        result += extinf + '\n'
+        result += url + '\n'
+
+    return result
+
+
 @app.route('/ott/<videoid>')
 def ott(videoid):
     try:
         m3u8_url = get_m3u8_url(videoid)
         if not m3u8_url:
             return "Veri yok", 404
-        ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
-        tsal = fix_m3u8(ts.text, videoid)
+
+        merged = merge_m3u8(m3u8_url, videoid, repeat=3)
+        if not merged:
+            return "M3U8 alinamadi", 500
+
+        tsal = fix_m3u8(merged, videoid)
         return Response(tsal, content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500
 
 
-# Chunk proxy — /ott-seg/<videoid>/<filename>?s=...&t=...
 @app.route('/ott-seg/<videoid>/<filename>')
 def ott_seg(videoid, filename):
-    # .avif → .ts (gerçek dosya adı)
     filename = filename.replace('.avif', '.ts')
     query = request.query_string.decode()
     source = 'https://edge10.xmediaget.com/hls-live/' + videoid + '/1/' + filename

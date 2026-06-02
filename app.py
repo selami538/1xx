@@ -22,10 +22,11 @@ HEADERS = {
 }
 
 BASE_URL = "https://oyster-app-4xkwy.ondigitalocean.app"
+NGINX_URL = "https://corestream.ronaldovurdu.help"
 
 
 def normalize_edge(url):
-    url = re.sub(r'edge\d+', 'edge4', url)
+    url = re.sub(r'edge\d+', 'edge10', url)
     url = url.replace(':43434', '')
     return url
 
@@ -53,7 +54,9 @@ def get_m3u8_url(videoid):
 
 
 def fix_m3u8(tsal, videoid):
-    base = 'https://edge4.xmediaget.com/hls-live/' + videoid + '/1/'
+    # Chunk URL'leri nginx/ott-seg üzerinden ver
+    # source parametresinde tam xmediaget URL'i var, token dahil
+    base = NGINX_URL + '/ott-seg/' + videoid + '/'
     tsal = tsal.replace(videoid + '_', base + videoid + '_')
     if "internal" in tsal:
         tsal = tsal.replace('internal', base + 'internal')
@@ -71,6 +74,21 @@ def ott(videoid):
         ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
         tsal = fix_m3u8(ts.text, videoid)
         return Response(tsal, content_type='application/vnd.apple.mpegurl')
+    except Exception as e:
+        return str(e), 500
+
+
+# Chunk proxy — /ott-seg/<videoid>/<filename>?s=...&t=...
+@app.route('/ott-seg/<videoid>/<filename>')
+def ott_seg(videoid, filename):
+    # Token'ı query string'den al
+    query = request.query_string.decode()
+    source = 'https://edge10.xmediaget.com/hls-live/' + videoid + '/1/' + filename
+    if query:
+        source += '?' + query
+    try:
+        ts = requests.get(source, headers=HEADERS, timeout=10)
+        return Response(ts.content, content_type=ts.headers.get('Content-Type', 'video/mp2t'))
     except Exception as e:
         return str(e), 500
 

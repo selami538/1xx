@@ -23,10 +23,10 @@ HEADERS = {
 
 BASE_URL = "https://oyster-app-4xkwy.ondigitalocean.app"
 NGINX_URL = "https://corestream.ronaldovurdu.help"
+TS_URL = "https://ts.yedeklinksa35.workers.dev"
 
 
 def normalize_edge(url):
-    # Önce edge100, sonra edge1X → hepsini edge10 yap
     url = re.sub(r'edge\d+', 'edge10', url)
     url = url.replace(':43434', '')
     return url
@@ -55,7 +55,8 @@ def get_m3u8_url(videoid):
 
 
 def fix_m3u8(tsal, videoid):
-    base = NGINX_URL + '/ott-seg/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/'
+    # Chunk URL'leri Cloudflare Workers üzerinden ver
+    base = TS_URL + '/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/'
     tsal = tsal.replace(videoid + '_', base + videoid + '_')
     if "internal" in tsal:
         tsal = tsal.replace('internal', base + 'internal')

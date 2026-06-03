@@ -27,21 +27,20 @@ BASE = "https://oyster-app-4xkwy.ondigitalocean.app"
 
 def get_m3u8_url(videoid):
     veriler = {"AppId": "3", "AppVer": "1025", "VpcVer": "1.0.11", "Language": "tr", "Token": "", "VideoId": videoid}
-    r = requests.post("https://1xlite-26316.pro/cinema", json=veriler, timeout=10)
+    r = requests.post("https://1xlite-26316.pro/cinema", json=veriler, timeout=8)
     if "FullscreenAllowed" not in r.text:
         return None
     veri = re.findall('"URL":"(.*?)"', r.text)
     if not veri:
         return None
     veri = veri[0].replace("\\/", "/")
-    veri = re.sub(r'edge\d+', 'edge10', veri)
+    # edge'i ZORLAMA — xmediaget'in verdigi orijinal edge kullan
     veri = veri.replace(':43434', '')
     if "m3u8" not in veri:
         return None
     return veri
 
 
-# ── Flussonic icin — chunk path-based (query yok, crash yok) ──
 @app.route('/flu/<videoid>')
 @app.route('/flu/<videoid>.m3u8')
 def flu(videoid):
@@ -49,7 +48,7 @@ def flu(videoid):
         m3u8_url = get_m3u8_url(videoid)
         if not m3u8_url:
             return "Veri yok", 404
-        ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
+        ts = requests.get(m3u8_url, headers=HEADERS, timeout=8)
         base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
         lines = ts.text.split('\n')
         result = []
@@ -60,7 +59,6 @@ def flu(videoid):
                     full = stripped
                 else:
                     full = base_source + stripped
-                # Tum source'u encode edip path'e goem — /fluseg/<encoded>
                 encoded = quote(full, safe='')
                 result.append(BASE + '/fluseg/' + encoded)
             else:
@@ -70,12 +68,11 @@ def flu(videoid):
         return str(e), 500
 
 
-# ── Flussonic chunk — source path'te encoded, query sorunu yok ──
 @app.route('/fluseg/<path:encoded>')
 def fluseg(encoded):
     source = unquote(encoded)
     try:
-        ts = requests.get(source, headers=HEADERS, timeout=10)
+        ts = requests.get(source, headers=HEADERS, timeout=8)
         content = ts.content
         resp = Response(content, content_type='video/mp2t')
         resp.headers['Content-Length'] = str(len(content))
@@ -89,15 +86,13 @@ def fluseg(encoded):
 def getstream():
     param = request.args.get("param")
     if param == "getts":
-        # Ham URL'den source'u cikar — Flask arg parse'a guvenme
         full_url = request.url
         idx = full_url.find('source=')
         if idx != -1:
-            source = full_url[idx + 7:]
-            source = unquote(source)
+            source = unquote(full_url[idx + 7:])
         else:
             source = ""
-        ts = requests.get(source, headers=HEADERS, timeout=10)
+        ts = requests.get(source, headers=HEADERS, timeout=8)
         content = ts.content
         resp = Response(content, content_type='video/mp2t')
         resp.headers['Content-Length'] = str(len(content))
@@ -111,7 +106,6 @@ def getstream():
             veri = r.text
             veri = re.findall('"URL":"(.*?)"', veri)
             veri = veri[0].replace("\\/", "__")
-            veri = re.sub(r'edge\d+', 'edge10', veri)
             veri = veri.replace(':43434', '')
             if "m3u8" in veri:
                 return BASE + "/" + veri + '&videoid=' + videoid
@@ -130,10 +124,6 @@ def index(m3u8):
     ts = requests.get(source, headers=HEADERS)
     tsal = ts.text
     tsal = tsal.replace(videoid + '_', BASE + '/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/' + videoid + '_')
-    if "internal" in tsal:
-        tsal = tsal.replace('internal', BASE + '/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/internal')
-    if "segment" in tsal:
-        tsal = tsal.replace('\nmedia', '\n' + BASE + '/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/media')
     return tsal
 
 

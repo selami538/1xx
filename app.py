@@ -53,11 +53,10 @@ def get_m3u8_url(videoid):
     return veri
 
 
-def fix_m3u8(tsal, videoid, m3u8_url):
-    base = WORKERS_URL + '/ott-seg/' + videoid + '/'
+def fix_m3u8(tsal, videoid, m3u8_url, chunk_base):
     base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
 
-    # TARGETDURATION'i en büyük EXTINF'ten buyuk yap (iOS uyumu)
+    # iOS uyumu — TARGETDURATION
     extinf_values = re.findall(r'#EXTINF:([\d.]+)', tsal)
     if extinf_values:
         max_dur = max(float(v) for v in extinf_values)
@@ -77,11 +76,38 @@ def fix_m3u8(tsal, videoid, m3u8_url):
                 filename = full.split('/')[-1].split('?')[0]
                 query = '?' + full.split('?')[1] if '?' in full else ''
             filename_avif = filename.replace('.ts', '.avif')
-            result.append(base + filename_avif + query)
+            result.append(chunk_base + filename_avif + query)
         else:
             result.append(stripped)
 
     return '\n'.join(result)
+
+
+# ── Flussonic icin — chunk'lar HAM xmediaget (Workers degil) ──
+@app.route('/flu/<videoid>')
+@app.route('/flu/<videoid>.m3u8')
+def flu(videoid):
+    try:
+        m3u8_url = get_m3u8_url(videoid)
+        if not m3u8_url:
+            return "Veri yok", 404
+        ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
+        # Chunk'lar direkt xmediaget — Flussonic pull edebilsin
+        base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
+        lines = ts.text.split('\n')
+        result = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith('#'):
+                if stripped.startswith('http'):
+                    result.append(stripped)
+                else:
+                    result.append(base_source + stripped)
+            else:
+                result.append(stripped)
+        return Response('\n'.join(result), content_type='application/vnd.apple.mpegurl')
+    except Exception as e:
+        return str(e), 500
 
 
 @app.route('/ott/<videoid>.m3u8')
@@ -91,7 +117,7 @@ def ott_m3u8(videoid):
         if not m3u8_url:
             return "Veri yok", 404
         ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
-        tsal = fix_m3u8(ts.text, videoid, m3u8_url)
+        tsal = fix_m3u8(ts.text, videoid, m3u8_url, WORKERS_URL + '/ott-seg/' + videoid + '/')
         return Response(tsal, content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500
@@ -104,7 +130,7 @@ def ott(videoid):
         if not m3u8_url:
             return "Veri yok", 404
         ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
-        tsal = fix_m3u8(ts.text, videoid, m3u8_url)
+        tsal = fix_m3u8(ts.text, videoid, m3u8_url, WORKERS_URL + '/ott-seg/' + videoid + '/')
         return Response(tsal, content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500
@@ -127,7 +153,6 @@ def ott_seg(videoid, filename):
 @app.route('/getstream', methods=['GET'])
 def getstream():
     param = request.args.get("param")
-
     if param == "getts":
         source = request.url
         source = source.replace(BASE_URL + '/getstream?param=getts&source=', '')
@@ -138,7 +163,6 @@ def getstream():
             return Response(ts.content, content_type=ts.headers.get('Content-Type', 'video/mp2t'))
         except Exception as e:
             return str(e), 500
-
     if param == "getm3u8":
         videoid = request.args.get("videoid", "")
         try:
@@ -148,7 +172,6 @@ def getstream():
             return BASE_URL + "/" + m3u8_url.replace("/", "__") + '&videoid=' + videoid
         except Exception as e:
             return str(e), 500
-
     return "param hatali", 400
 
 
@@ -161,7 +184,7 @@ def index(m3u8):
     videoid = request.args.get("videoid", "")
     try:
         ts = requests.get(source, headers=HEADERS, timeout=10)
-        tsal = fix_m3u8(ts.text, videoid, source)
+        tsal = fix_m3u8(ts.text, videoid, source, WORKERS_URL + '/ott-seg/' + videoid + '/')
         return Response(tsal, content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500

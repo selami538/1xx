@@ -1,6 +1,7 @@
 import requests
 from flask import Flask, request, Response
 from flask_cors import CORS
+from urllib.parse import quote
 import re
 
 app = Flask(__name__)
@@ -40,7 +41,7 @@ def get_m3u8_url(videoid):
     return veri
 
 
-# ── Flussonic icin — chunk'lar oyster proxy uzerinden (header'li, 403 yok) ──
+# ── Flussonic icin — chunk source URL-encoded (cift ? sorunu cozuldu) ──
 @app.route('/flu/<videoid>')
 @app.route('/flu/<videoid>.m3u8')
 def flu(videoid):
@@ -59,13 +60,43 @@ def flu(videoid):
                     full = stripped
                 else:
                     full = base_source + stripped
-                # Chunk'i oyster getstream proxy'sine cevir (header ekler, 403 olmaz)
-                result.append(BASE + '/getstream?param=getts&source=' + full)
+                # source'u URL-encode et — cift ? olmaz, Flussonic crash etmez
+                encoded = quote(full, safe='')
+                result.append(BASE + '/getstream?param=getts&source=' + encoded)
             else:
                 result.append(stripped)
         return Response('\n'.join(result), content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500
+
+
+@app.route('/getstream', methods=['GET'])
+def getstream():
+    param = request.args.get("param")
+    if param == "getts":
+        source = request.args.get("source", "")
+        if not source:
+            # eski format icin fallback
+            source = request.url
+            source = source.replace(BASE + '/getstream?param=getts&source=', '')
+            source = source.replace('%2F', '/')
+            source = source.replace('%3F', '?')
+        ts = requests.get(source, headers=HEADERS)
+        return Response(ts.content, content_type=ts.headers.get('Content-Type', 'video/mp2t'))
+    if param == "getm3u8":
+        videoid = request.args.get("videoid")
+        veriler = {"AppId": "3", "AppVer": "1025", "VpcVer": "1.0.11", "Language": "tr", "Token": "", "VideoId": videoid}
+        r = requests.post("https://1xlite-26316.pro/cinema", json=veriler)
+        if "FullscreenAllowed" in r.text:
+            veri = r.text
+            veri = re.findall('"URL":"(.*?)"', veri)
+            veri = veri[0].replace("\\/", "__")
+            veri = re.sub(r'edge\d+', 'edge10', veri)
+            veri = veri.replace(':43434', '')
+            if "m3u8" in veri:
+                return BASE + "/" + veri + '&videoid=' + videoid
+        else:
+            return "Veri yok"
 
 
 @app.route('/<m3u8>')
@@ -84,32 +115,6 @@ def index(m3u8):
     if "segment" in tsal:
         tsal = tsal.replace('\nmedia', '\n' + BASE + '/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/media')
     return tsal
-
-
-@app.route('/getstream', methods=['GET'])
-def getstream():
-    param = request.args.get("param")
-    if param == "getts":
-        source = request.url
-        source = source.replace(BASE + '/getstream?param=getts&source=', '')
-        source = source.replace('%2F', '/')
-        source = source.replace('%3F', '?')
-        ts = requests.get(source, headers=HEADERS)
-        return ts.content
-    if param == "getm3u8":
-        videoid = request.args.get("videoid")
-        veriler = {"AppId": "3", "AppVer": "1025", "VpcVer": "1.0.11", "Language": "tr", "Token": "", "VideoId": videoid}
-        r = requests.post("https://1xlite-26316.pro/cinema", json=veriler)
-        if "FullscreenAllowed" in r.text:
-            veri = r.text
-            veri = re.findall('"URL":"(.*?)"', veri)
-            veri = veri[0].replace("\\/", "__")
-            veri = re.sub(r'edge\d+', 'edge10', veri)
-            veri = veri.replace(':43434', '')
-            if "m3u8" in veri:
-                return BASE + "/" + veri + '&videoid=' + videoid
-        else:
-            return "Veri yok"
 
 
 if __name__ == '__main__':

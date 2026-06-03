@@ -1,7 +1,7 @@
 import requests
 from flask import Flask, request, Response
 from flask_cors import CORS
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 import re
 
 app = Flask(__name__)
@@ -41,7 +41,7 @@ def get_m3u8_url(videoid):
     return veri
 
 
-# ── Flussonic icin — chunk source URL-encoded (cift ? sorunu cozuldu) ──
+# ── Flussonic icin — chunk path-based (query yok, crash yok) ──
 @app.route('/flu/<videoid>')
 @app.route('/flu/<videoid>.m3u8')
 def flu(videoid):
@@ -60,12 +60,27 @@ def flu(videoid):
                     full = stripped
                 else:
                     full = base_source + stripped
-                # source'u URL-encode et — cift ? olmaz, Flussonic crash etmez
+                # Tum source'u encode edip path'e goem — /fluseg/<encoded>
                 encoded = quote(full, safe='')
-                result.append(BASE + '/getstream?param=getts&source=' + encoded)
+                result.append(BASE + '/fluseg/' + encoded)
             else:
                 result.append(stripped)
         return Response('\n'.join(result), content_type='application/vnd.apple.mpegurl')
+    except Exception as e:
+        return str(e), 500
+
+
+# ── Flussonic chunk — source path'te encoded, query sorunu yok ──
+@app.route('/fluseg/<path:encoded>')
+def fluseg(encoded):
+    source = unquote(encoded)
+    try:
+        ts = requests.get(source, headers=HEADERS, timeout=10)
+        content = ts.content
+        resp = Response(content, content_type='video/mp2t')
+        resp.headers['Content-Length'] = str(len(content))
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        return resp
     except Exception as e:
         return str(e), 500
 
@@ -74,15 +89,20 @@ def flu(videoid):
 def getstream():
     param = request.args.get("param")
     if param == "getts":
-        source = request.args.get("source", "")
-        if not source:
-            # eski format icin fallback
-            source = request.url
-            source = source.replace(BASE + '/getstream?param=getts&source=', '')
-            source = source.replace('%2F', '/')
-            source = source.replace('%3F', '?')
-        ts = requests.get(source, headers=HEADERS)
-        return Response(ts.content, content_type=ts.headers.get('Content-Type', 'video/mp2t'))
+        # Ham URL'den source'u cikar — Flask arg parse'a guvenme
+        full_url = request.url
+        idx = full_url.find('source=')
+        if idx != -1:
+            source = full_url[idx + 7:]
+            source = unquote(source)
+        else:
+            source = ""
+        ts = requests.get(source, headers=HEADERS, timeout=10)
+        content = ts.content
+        resp = Response(content, content_type='video/mp2t')
+        resp.headers['Content-Length'] = str(len(content))
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        return resp
     if param == "getm3u8":
         videoid = request.args.get("videoid")
         veriler = {"AppId": "3", "AppVer": "1025", "VpcVer": "1.0.11", "Language": "tr", "Token": "", "VideoId": videoid}

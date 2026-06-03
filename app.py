@@ -21,6 +21,8 @@ HEADERS = {
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
 }
 
+BASE = "https://oyster-app-4xkwy.ondigitalocean.app"
+
 
 def get_m3u8_url(videoid):
     veriler = {"AppId": "3", "AppVer": "1025", "VpcVer": "1.0.11", "Language": "tr", "Token": "", "VideoId": videoid}
@@ -38,7 +40,7 @@ def get_m3u8_url(videoid):
     return veri
 
 
-# ── Flussonic icin — chunk'lar HAM xmediaget (tam URL) ──
+# ── Flussonic icin — chunk'lar oyster proxy uzerinden (header'li, 403 yok) ──
 @app.route('/flu/<videoid>')
 @app.route('/flu/<videoid>.m3u8')
 def flu(videoid):
@@ -54,9 +56,11 @@ def flu(videoid):
             stripped = line.strip()
             if stripped and not stripped.startswith('#'):
                 if stripped.startswith('http'):
-                    result.append(stripped)
+                    full = stripped
                 else:
-                    result.append(base_source + stripped)
+                    full = base_source + stripped
+                # Chunk'i oyster getstream proxy'sine cevir (header ekler, 403 olmaz)
+                result.append(BASE + '/getstream?param=getts&source=' + full)
             else:
                 result.append(stripped)
         return Response('\n'.join(result), content_type='application/vnd.apple.mpegurl')
@@ -68,17 +72,17 @@ def flu(videoid):
 def index(m3u8):
     m3u8 = request.url.replace('__', '/')
     source = m3u8
-    source = source.replace('https://oyster-app-4xkwy.ondigitalocean.app/', '')
+    source = source.replace(BASE + '/', '')
     source = source.replace('%2F', '/')
     source = source.replace('%3F', '?')
     videoid = request.args.get("videoid")
     ts = requests.get(source, headers=HEADERS)
     tsal = ts.text
-    tsal = tsal.replace(videoid + '_', 'https://oyster-app-4xkwy.ondigitalocean.app/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/' + videoid + '_')
+    tsal = tsal.replace(videoid + '_', BASE + '/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/' + videoid + '_')
     if "internal" in tsal:
-        tsal = tsal.replace('internal', 'https://oyster-app-4xkwy.ondigitalocean.app/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/internal')
+        tsal = tsal.replace('internal', BASE + '/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/internal')
     if "segment" in tsal:
-        tsal = tsal.replace('\nmedia', '\nhttps://oyster-app-4xkwy.ondigitalocean.app/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/media')
+        tsal = tsal.replace('\nmedia', '\n' + BASE + '/getstream?param=getts&source=https://edge10.xmediaget.com/hls-live/' + videoid + '/1/media')
     return tsal
 
 
@@ -87,7 +91,7 @@ def getstream():
     param = request.args.get("param")
     if param == "getts":
         source = request.url
-        source = source.replace('https://oyster-app-4xkwy.ondigitalocean.app/getstream?param=getts&source=', '')
+        source = source.replace(BASE + '/getstream?param=getts&source=', '')
         source = source.replace('%2F', '/')
         source = source.replace('%3F', '?')
         ts = requests.get(source, headers=HEADERS)
@@ -103,7 +107,7 @@ def getstream():
             veri = re.sub(r'edge\d+', 'edge10', veri)
             veri = veri.replace(':43434', '')
             if "m3u8" in veri:
-                return "https://oyster-app-4xkwy.ondigitalocean.app/" + veri + '&videoid=' + videoid
+                return BASE + "/" + veri + '&videoid=' + videoid
         else:
             return "Veri yok"
 

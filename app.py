@@ -4,6 +4,7 @@ import time
 import threading
 from flask import Flask, request, Response
 from flask_cors import CORS
+from urllib.parse import quote
 
 app = Flask(__name__)
 CORS(app)
@@ -25,13 +26,8 @@ HEADERS = {
 
 WORKERS = "https://ts.yedeklinksa35.workers.dev"
 
-# ── M3U8 cache: videoid -> (timestamp, m3u8_text) ──
 M3U8_CACHE = {}
-M3U8_TTL = 1.5  # saniye
-
-# ── Token/edge cache: videoid -> (base, query) ──
-TOKEN_CACHE = {}
-
+M3U8_TTL = 1.5
 CACHE_LOCK = threading.Lock()
 
 
@@ -51,7 +47,6 @@ def get_m3u8_url(videoid):
 
 
 def build_m3u8(videoid):
-    """1xlite + kaynak m3u8 cek, isle. TOKEN_CACHE doldur."""
     m3u8_url = get_m3u8_url(videoid)
     if not m3u8_url:
         return None
@@ -61,10 +56,6 @@ def build_m3u8(videoid):
     base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
     query = m3u8_url.split('?', 1)[1] if '?' in m3u8_url else ''
 
-    with CACHE_LOCK:
-        TOKEN_CACHE[videoid] = {"base": base_source, "query": query}
-
-    # iOS uyumu — TARGETDURATION
     extinf_values = re.findall(r'#EXTINF:([\d.]+)', text)
     if extinf_values:
         max_dur = max(float(v) for v in extinf_values)
@@ -76,11 +67,16 @@ def build_m3u8(videoid):
     for line in lines:
         stripped = line.strip()
         if stripped and not stripped.startswith('#'):
+            # TAM xmediaget URL'i kur
             if stripped.startswith('http'):
-                fname = stripped.split('/')[-1].split('?')[0]
+                full = stripped
             else:
-                fname = stripped.split('?')[0]
-            result.append(WORKERS + '/seg/' + videoid + '/' + fname.replace('.ts', '.avif'))
+                full = base_source + stripped
+                if query and '?' not in stripped:
+                    full += '?' + query
+            # Tam URL'i encode et — nginx decode edip xmediaget'e gidecek
+            encoded = quote(full, safe='')
+            result.append(WORKERS + '/seg/' + encoded + '.avif')
         else:
             result.append(stripped)
     return '\n'.join(result)
@@ -91,13 +87,11 @@ def build_m3u8(videoid):
 def ott(videoid):
     try:
         now = time.time()
-        # Cache kontrol
         with CACHE_LOCK:
             cached = M3U8_CACHE.get(videoid)
         if cached and (now - cached[0] < M3U8_TTL):
             return Response(cached[1], content_type='application/vnd.apple.mpegurl')
 
-        # Cache yok/eski — yeniden uret
         m3u8 = build_m3u8(videoid)
         if not m3u8:
             return "Veri yok", 404
@@ -108,38 +102,17 @@ def ott(videoid):
         return str(e), 500
 
 
-@app.route('/seg/<videoid>/<filename>')
-def seg(videoid, filename):
-    if filename.endswith('.avif'):
-        filename = filename[:-5] + '.ts'
-
-    with CACHE_LOCK:
-        info = TOKEN_CACHE.get(videoid)
-
-    if not info:
-        # token yok — m3u8 cek (token doldur)
-        build_m3u8(videoid)
-        with CACHE_LOCK:
-            info = TOKEN_CACHE.get(videoid)
-        if not info:
-            return "Veri yok", 404
-
-    source = info["base"] + filename
-    if info["query"]:
-        source += '?' + info["query"]
+# Chunk artik OYSTER'a gelmiyor — nginx direkt xmediaget'e gidiyor.
+# Bu endpoint sadece fallback/acil durum icin.
+@app.route('/seg/<path:encoded>')
+def seg(encoded):
+    from urllib.parse import unquote
+    if encoded.endswith('.avif'):
+        encoded = encoded[:-5]
+    source = unquote(encoded)
     try:
         ts = requests.get(source, headers=HEADERS, timeout=10)
         content = ts.content
-        # token eskiyse bir kez yenile
-        if len(content) == 0:
-            build_m3u8(videoid)
-            with CACHE_LOCK:
-                info = TOKEN_CACHE.get(videoid)
-            source = info["base"] + filename
-            if info["query"]:
-                source += '?' + info["query"]
-            ts = requests.get(source, headers=HEADERS, timeout=10)
-            content = ts.content
         resp = Response(content, content_type='video/mp2t')
         resp.headers['Content-Length'] = str(len(content))
         resp.headers['Access-Control-Allow-Origin'] = '*'

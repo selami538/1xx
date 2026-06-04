@@ -2,7 +2,6 @@ import requests
 import re
 from flask import Flask, request, Response
 from flask_cors import CORS
-from urllib.parse import quote, unquote
 
 app = Flask(__name__)
 CORS(app)
@@ -25,6 +24,9 @@ HEADERS = {
 BASE = "https://oyster-app-4xkwy.ondigitalocean.app"
 WORKERS = "https://ts.yedeklinksa35.workers.dev"
 
+# videoid -> {"base": edge+path prefix, "query": token query}
+TOKEN_CACHE = {}
+
 
 def get_m3u8_url(videoid):
     veriler = {"AppId": "3", "AppVer": "1025", "VpcVer": "1.0.11", "Language": "tr", "Token": "", "VideoId": videoid}
@@ -42,9 +44,17 @@ def get_m3u8_url(videoid):
 
 
 def fix_m3u8(tsal, videoid, m3u8_url):
+    # base_source: edge + path (mediaplaylist.m3u8'e kadar)
     base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
+    # token query (m3u8 URL'indeki ?s=...&t=...)
+    query = ''
+    if '?' in m3u8_url:
+        query = m3u8_url.split('?', 1)[1]
 
-    # iOS uyumu — TARGETDURATION en buyuk EXTINF'ten buyuk
+    # Bu videoid icin edge+token sakla
+    TOKEN_CACHE[videoid] = {"base": base_source, "query": query}
+
+    # iOS uyumu — TARGETDURATION
     extinf_values = re.findall(r'#EXTINF:([\d.]+)', tsal)
     if extinf_values:
         max_dur = max(float(v) for v in extinf_values)
@@ -56,9 +66,13 @@ def fix_m3u8(tsal, videoid, m3u8_url):
     for line in lines:
         stripped = line.strip()
         if stripped and not stripped.startswith('#'):
-            full = stripped if stripped.startswith('http') else base_source + stripped
-            encoded = quote(full, safe='')
-            result.append(WORKERS + '/ott-seg/' + encoded + '.avif')
+            # sadece dosya adini al (segment1804.ts gibi), token'i at
+            if stripped.startswith('http'):
+                fname = stripped.split('/')[-1].split('?')[0]
+            else:
+                fname = stripped.split('?')[0]
+            # KISA chunk URL: /seg/<videoid>/<dosyaadi>
+            result.append(WORKERS + '/seg/' + videoid + '/' + fname)
         else:
             result.append(stripped)
     return '\n'.join(result)
@@ -78,14 +92,39 @@ def ott(videoid):
         return str(e), 500
 
 
-@app.route('/ott-seg/<path:encoded>')
-def ott_seg(encoded):
-    if encoded.endswith('.avif'):
-        encoded = encoded[:-5]
-    source = unquote(encoded)
+# KISA chunk endpoint — /seg/<videoid>/<dosyaadi>
+@app.route('/seg/<videoid>/<filename>')
+def seg(videoid, filename):
+    info = TOKEN_CACHE.get(videoid)
+    if not info:
+        # token yoksa once m3u8 cek (edge+token doldur)
+        m3u8_url = get_m3u8_url(videoid)
+        if m3u8_url:
+            base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
+            query = m3u8_url.split('?', 1)[1] if '?' in m3u8_url else ''
+            info = {"base": base_source, "query": query}
+            TOKEN_CACHE[videoid] = info
+        else:
+            return "Veri yok", 404
+
+    source = info["base"] + filename
+    if info["query"]:
+        source += '?' + info["query"]
     try:
         ts = requests.get(source, headers=HEADERS, timeout=10)
         content = ts.content
+        # token eskiyse (bos donduyse) bir kez yenile ve tekrar dene
+        if len(content) == 0:
+            m3u8_url = get_m3u8_url(videoid)
+            if m3u8_url:
+                base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
+                query = m3u8_url.split('?', 1)[1] if '?' in m3u8_url else ''
+                TOKEN_CACHE[videoid] = {"base": base_source, "query": query}
+                source = base_source + filename
+                if query:
+                    source += '?' + query
+                ts = requests.get(source, headers=HEADERS, timeout=10)
+                content = ts.content
         resp = Response(content, content_type='video/mp2t')
         resp.headers['Content-Length'] = str(len(content))
         resp.headers['Access-Control-Allow-Origin'] = '*'

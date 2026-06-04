@@ -1,5 +1,6 @@
 import requests
 import re
+import time
 from flask import Flask, request, Response
 from flask_cors import CORS
 from urllib.parse import quote, unquote
@@ -25,6 +26,10 @@ HEADERS = {
 BASE = "https://oyster-app-4xkwy.ondigitalocean.app"
 WORKERS = "https://ts.yedeklinksa35.workers.dev"
 
+# Segment gecmisi: {videoid: {seq: (extinf, encoded_url)}}
+SEGMENT_HISTORY = {}
+MAX_SEGMENTS = 12
+
 
 def get_m3u8_url(videoid):
     veriler = {"AppId": "3", "AppVer": "1025", "VpcVer": "1.0.11", "Language": "tr", "Token": "", "VideoId": videoid}
@@ -41,33 +46,6 @@ def get_m3u8_url(videoid):
     return veri
 
 
-def fix_m3u8(tsal, videoid, m3u8_url):
-    base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
-
-    # iOS uyumu — TARGETDURATION
-    extinf_values = re.findall(r'#EXTINF:([\d.]+)', tsal)
-    if extinf_values:
-        max_dur = max(float(v) for v in extinf_values)
-        new_target = int(max_dur) + 1
-        tsal = re.sub(r'#EXT-X-TARGETDURATION:\d+', f'#EXT-X-TARGETDURATION:{new_target}', tsal)
-
-    lines = tsal.split('\n')
-    result = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith('#'):
-            if stripped.startswith('http'):
-                full = stripped
-            else:
-                full = base_source + stripped
-            # Tam URL'i encode et, Workers /ott-seg/<encoded>.avif ile ver
-            encoded = quote(full, safe='')
-            result.append(WORKERS + '/ott-seg/' + encoded + '.avif')
-        else:
-            result.append(stripped)
-    return '\n'.join(result)
-
-
 @app.route('/ott/<videoid>.m3u8')
 @app.route('/ott/<videoid>')
 def ott(videoid):
@@ -76,13 +54,61 @@ def ott(videoid):
         if not m3u8_url:
             return "Veri yok", 404
         ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
-        tsal = fix_m3u8(ts.text, videoid, m3u8_url)
-        return Response(tsal, content_type='application/vnd.apple.mpegurl')
+        text = ts.text
+        base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
+
+        # Kaynak MEDIA-SEQUENCE'i al
+        mseq_match = re.search(r'#EXT-X-MEDIA-SEQUENCE:(\d+)', text)
+        base_seq = int(mseq_match.group(1)) if mseq_match else 0
+
+        # Segmentleri parse et, segment numarasini cikar
+        lines = text.split('\n')
+        max_extinf = 2.0
+        i = 0
+        seq_offset = 0
+        if videoid not in SEGMENT_HISTORY:
+            SEGMENT_HISTORY[videoid] = {}
+        hist = SEGMENT_HISTORY[videoid]
+
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith('#EXTINF:'):
+                dur = float(re.findall(r'[\d.]+', line)[0])
+                max_extinf = max(max_extinf, dur)
+                if i + 1 < len(lines):
+                    seg_line = lines[i+1].strip()
+                    if seg_line and not seg_line.startswith('#'):
+                        full = seg_line if seg_line.startswith('http') else base_source + seg_line
+                        # Segment numarasini dosya adindan cikar
+                        num_match = re.search(r'segment(\d+)', full)
+                        seg_num = int(num_match.group(1)) if num_match else (base_seq + seq_offset)
+                        encoded = quote(full, safe='')
+                        hist[seg_num] = (line, WORKERS + '/ott-seg/' + encoded + '.avif')
+                        seq_offset += 1
+                i += 2
+            else:
+                i += 1
+
+        # Eski segmentleri temizle, son MAX_SEGMENTS tut
+        if len(hist) > MAX_SEGMENTS:
+            for k in sorted(hist.keys())[:-MAX_SEGMENTS]:
+                del hist[k]
+
+        # M3U8 olustur — sirali segmentler
+        sorted_nums = sorted(hist.keys())
+        target = int(max_extinf) + 1
+        out = ['#EXTM3U', '#EXT-X-VERSION:3', f'#EXT-X-TARGETDURATION:{target}',
+               f'#EXT-X-MEDIA-SEQUENCE:{sorted_nums[0]}']
+        for n in sorted_nums:
+            extinf, url = hist[n]
+            out.append(extinf)
+            out.append(url)
+
+        return Response('\n'.join(out) + '\n', content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500
 
 
-# Chunk proxy — encoded source path'te, .avif sonek atilir
 @app.route('/ott-seg/<path:encoded>')
 def ott_seg(encoded):
     if encoded.endswith('.avif'):

@@ -1,68 +1,72 @@
 import requests
 import re
-from flask import Flask, Response
+from flask import Flask, redirect
 from flask_cors import CORS
-from urllib.parse import quote
 
 app = Flask(__name__)
 CORS(app)
 
 HEADERS = {
     "accept": "*/*",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-WORKERS = "https://ts.yedeklinksa35.workers.dev"
+FLUSSONIC_SERVER = "http://95.179.255.147"
+# Flussonic'e komut vermek için config'deki edit_auth bilgilerini kullanıyoruz
+FLUSSONIC_API_USER = "flussonic"
+FLUSSONIC_API_PASS = "letmein!"
 
 def get_m3u8_url(videoid):
     veriler = {"AppId": "3", "AppVer": "1025", "VpcVer": "1.0.11", "Language": "tr", "Token": "", "VideoId": videoid}
     try:
         r = requests.post("https://1xlite-26316.pro/cinema", json=veriler, timeout=10)
+        if "FullscreenAllowed" not in r.text:
+            return None
         veri = re.findall('"URL":"(.*?)"', r.text)
-        if not veri: return None
+        if not veri:
+            return None
         return veri[0].replace("\\/", "/").replace(':43434', '')
-    except:
+    except Exception:
         return None
 
 @app.route('/ott/<videoid>.m3u8')
 @app.route('/ott/<videoid>')
 def ott(videoid):
     try:
-        m3u8_url = get_m3u8_url(videoid)
-        if not m3u8_url: return "Veri yok", 404
+        # 1. İstek geldiğinde Oyster'dan çalışan taze linki kapıyoruz
+        oyster_real_url = get_m3u8_url(videoid)
+        if not oyster_real_url: 
+            return "Oyster kaynak linki çözülemedi", 404
 
-        ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
-        lines = ts.text.split('\n')
-        base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
+        stream_name = f"ott_{videoid}"
 
-        out = []
-        for line in lines:
-            line_str = line.strip()
-            if not line_str: continue
-            
-            if not line_str.startswith('#'):
-                full_url = line_str if line_str.startswith('http') else base_source + line_str
-                encoded = quote(full_url, safe='')
-                out.append(f"{WORKERS}/ott-seg/{encoded}.ts") # iOS için .ts uzantısını koru
-            else:
-                out.append(line_str)
+        # 2. FLUSSONIC API'sine canlı olarak bu kanalı transcode ayarıyla ekle diyoruz
+        # Hata payını sıfırlamak için resmi Flussonic API formatını kullanıyoruz
+        api_url = f"{FLUSSONIC_SERVER}/flussonic/api/v3/streams/{stream_name}"
+        
+        payload = {
+            "inputs": [{"url": oyster_real_url}],
+            "transcoder": {
+                "vcodec": [{"codec": "copy"}],
+                "acodec": [{"codec": "aac", "bitrate": 128}]
+            },
+            "ondemand": True, # Kimse izlemezse kapansın sunucu yorulmasın
+            "clients_timeout": 60
+        }
 
-        return Response('\n'.join(out) + '\n', content_type='application/vnd.apple.mpegurl')
-    except Exception as e:
-        return str(e), 500
+        # Flussonic'e komutu gönderiyoruz
+        requests.put(
+            api_url, 
+            json=payload, 
+            auth=(FLUSSONIC_API_USER, FLUSSONIC_API_PASS), 
+            timeout=5
+        )
 
-@app.route('/ott-seg/<path:encoded>')
-def ott_seg(encoded):
-    if encoded.endswith('.ts'): encoded = encoded[:-3]
-    elif encoded.endswith('.avif'): encoded = encoded[:-5]
-    source = requests.utils.unquote(encoded)
-    try:
-        ts = requests.get(source, headers=HEADERS, timeout=10)
-        resp = Response(ts.content, content_type='video/mp2t')
-        resp.headers['Access-Control-Allow-Origin'] = '*'
-        return resp
+        # 3. İzleyiciyi Flussonic'in az önce oluşturduğu kusursuz tamir edilmiş yayına yönlendiriyoruz
+        return redirect(f"{FLUSSONIC_SERVER}/{stream_name}/index.m3u8")
+
     except Exception as e:
         return str(e), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='127.0.0.1', port=5000)

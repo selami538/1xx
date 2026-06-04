@@ -1,5 +1,7 @@
 import requests
 import re
+import time
+import threading
 from flask import Flask, request, Response
 from flask_cors import CORS
 
@@ -21,11 +23,16 @@ HEADERS = {
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
 }
 
-BASE = "https://oyster-app-4xkwy.ondigitalocean.app"
 WORKERS = "https://ts.yedeklinksa35.workers.dev"
 
-# videoid -> {"base": edge+path prefix, "query": token query}
+# ── M3U8 cache: videoid -> (timestamp, m3u8_text) ──
+M3U8_CACHE = {}
+M3U8_TTL = 1.5  # saniye
+
+# ── Token/edge cache: videoid -> (base, query) ──
 TOKEN_CACHE = {}
+
+CACHE_LOCK = threading.Lock()
 
 
 def get_m3u8_url(videoid):
@@ -43,35 +50,36 @@ def get_m3u8_url(videoid):
     return veri
 
 
-def fix_m3u8(tsal, videoid, m3u8_url):
-    # base_source: edge + path (mediaplaylist.m3u8'e kadar)
-    base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
-    # token query (m3u8 URL'indeki ?s=...&t=...)
-    query = ''
-    if '?' in m3u8_url:
-        query = m3u8_url.split('?', 1)[1]
+def build_m3u8(videoid):
+    """1xlite + kaynak m3u8 cek, isle. TOKEN_CACHE doldur."""
+    m3u8_url = get_m3u8_url(videoid)
+    if not m3u8_url:
+        return None
 
-    # Bu videoid icin edge+token sakla
-    TOKEN_CACHE[videoid] = {"base": base_source, "query": query}
+    ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
+    text = ts.text
+    base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
+    query = m3u8_url.split('?', 1)[1] if '?' in m3u8_url else ''
+
+    with CACHE_LOCK:
+        TOKEN_CACHE[videoid] = {"base": base_source, "query": query}
 
     # iOS uyumu — TARGETDURATION
-    extinf_values = re.findall(r'#EXTINF:([\d.]+)', tsal)
+    extinf_values = re.findall(r'#EXTINF:([\d.]+)', text)
     if extinf_values:
         max_dur = max(float(v) for v in extinf_values)
         new_target = int(max_dur) + 1
-        tsal = re.sub(r'#EXT-X-TARGETDURATION:\d+', f'#EXT-X-TARGETDURATION:{new_target}', tsal)
+        text = re.sub(r'#EXT-X-TARGETDURATION:\d+', f'#EXT-X-TARGETDURATION:{new_target}', text)
 
-    lines = tsal.split('\n')
+    lines = text.split('\n')
     result = []
     for line in lines:
         stripped = line.strip()
         if stripped and not stripped.startswith('#'):
-            # sadece dosya adini al (segment1804.ts gibi), token'i at
             if stripped.startswith('http'):
                 fname = stripped.split('/')[-1].split('?')[0]
             else:
                 fname = stripped.split('?')[0]
-            # KISA chunk URL: /seg/<videoid>/<dosyaadi>.avif
             result.append(WORKERS + '/seg/' + videoid + '/' + fname.replace('.ts', '.avif'))
         else:
             result.append(stripped)
@@ -82,32 +90,38 @@ def fix_m3u8(tsal, videoid, m3u8_url):
 @app.route('/ott/<videoid>')
 def ott(videoid):
     try:
-        m3u8_url = get_m3u8_url(videoid)
-        if not m3u8_url:
+        now = time.time()
+        # Cache kontrol
+        with CACHE_LOCK:
+            cached = M3U8_CACHE.get(videoid)
+        if cached and (now - cached[0] < M3U8_TTL):
+            return Response(cached[1], content_type='application/vnd.apple.mpegurl')
+
+        # Cache yok/eski — yeniden uret
+        m3u8 = build_m3u8(videoid)
+        if not m3u8:
             return "Veri yok", 404
-        ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
-        tsal = fix_m3u8(ts.text, videoid, m3u8_url)
-        return Response(tsal, content_type='application/vnd.apple.mpegurl')
+        with CACHE_LOCK:
+            M3U8_CACHE[videoid] = (now, m3u8)
+        return Response(m3u8, content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500
 
 
-# KISA chunk endpoint — /seg/<videoid>/<dosyaadi>
 @app.route('/seg/<videoid>/<filename>')
 def seg(videoid, filename):
-    # .avif -> .ts (xmediaget .ts ister)
     if filename.endswith('.avif'):
         filename = filename[:-5] + '.ts'
-    info = TOKEN_CACHE.get(videoid)
+
+    with CACHE_LOCK:
+        info = TOKEN_CACHE.get(videoid)
+
     if not info:
-        # token yoksa once m3u8 cek (edge+token doldur)
-        m3u8_url = get_m3u8_url(videoid)
-        if m3u8_url:
-            base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
-            query = m3u8_url.split('?', 1)[1] if '?' in m3u8_url else ''
-            info = {"base": base_source, "query": query}
-            TOKEN_CACHE[videoid] = info
-        else:
+        # token yok — m3u8 cek (token doldur)
+        build_m3u8(videoid)
+        with CACHE_LOCK:
+            info = TOKEN_CACHE.get(videoid)
+        if not info:
             return "Veri yok", 404
 
     source = info["base"] + filename
@@ -116,19 +130,17 @@ def seg(videoid, filename):
     try:
         ts = requests.get(source, headers=HEADERS, timeout=10)
         content = ts.content
-        # token eskiyse (bos donduyse) bir kez yenile ve tekrar dene
+        # token eskiyse bir kez yenile
         if len(content) == 0:
-            m3u8_url = get_m3u8_url(videoid)
-            if m3u8_url:
-                base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
-                query = m3u8_url.split('?', 1)[1] if '?' in m3u8_url else ''
-                TOKEN_CACHE[videoid] = {"base": base_source, "query": query}
-                source = base_source + filename
-                if query:
-                    source += '?' + query
-                ts = requests.get(source, headers=HEADERS, timeout=10)
-                content = ts.content
-        resp = Response(content, content_type='image/jpeg')
+            build_m3u8(videoid)
+            with CACHE_LOCK:
+                info = TOKEN_CACHE.get(videoid)
+            source = info["base"] + filename
+            if info["query"]:
+                source += '?' + info["query"]
+            ts = requests.get(source, headers=HEADERS, timeout=10)
+            content = ts.content
+        resp = Response(content, content_type='video/mp2t')
         resp.headers['Content-Length'] = str(len(content))
         resp.headers['Access-Control-Allow-Origin'] = '*'
         return resp

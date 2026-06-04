@@ -128,7 +128,7 @@ def seg(videoid, filename):
                     source += '?' + query
                 ts = requests.get(source, headers=HEADERS, timeout=10)
                 content = ts.content
-        resp = Response(content, content_type='video/mp2t')
+        resp = Response(content, content_type='image/jpeg')
         resp.headers['Content-Length'] = str(len(content))
         resp.headers['Access-Control-Allow-Origin'] = '*'
         return resp

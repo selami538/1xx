@@ -71,8 +71,8 @@ def fix_m3u8(tsal, videoid, m3u8_url):
                 fname = stripped.split('/')[-1].split('?')[0]
             else:
                 fname = stripped.split('?')[0]
-            # KISA chunk URL: /seg/<videoid>/<dosyaadi>
-            result.append(WORKERS + '/seg/' + videoid + '/' + fname)
+            # KISA chunk URL: /seg/<videoid>/<dosyaadi>.avif
+            result.append(WORKERS + '/seg/' + videoid + '/' + fname.replace('.ts', '.avif'))
         else:
             result.append(stripped)
     return '\n'.join(result)
@@ -95,6 +95,9 @@ def ott(videoid):
 # KISA chunk endpoint — /seg/<videoid>/<dosyaadi>
 @app.route('/seg/<videoid>/<filename>')
 def seg(videoid, filename):
+    # .avif -> .ts (xmediaget .ts ister)
+    if filename.endswith('.avif'):
+        filename = filename[:-5] + '.ts'
     info = TOKEN_CACHE.get(videoid)
     if not info:
         # token yoksa once m3u8 cek (edge+token doldur)

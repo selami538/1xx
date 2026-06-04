@@ -23,6 +23,7 @@ HEADERS = {
 }
 
 BASE = "https://oyster-app-4xkwy.ondigitalocean.app"
+WORKERS = "https://ts.yedeklinksa35.workers.dev"
 
 
 def get_m3u8_url(videoid):
@@ -40,33 +41,47 @@ def get_m3u8_url(videoid):
     return veri
 
 
-# ── Flussonic icin — chunk'lar oyster proxy uzerinden (header'li) ──
-@app.route('/flu/<videoid>')
-@app.route('/flu/<videoid>.m3u8')
-def flu(videoid):
+def fix_m3u8(tsal, videoid, m3u8_url):
+    base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
+
+    # iOS uyumu — TARGETDURATION en buyuk EXTINF'ten buyuk
+    extinf_values = re.findall(r'#EXTINF:([\d.]+)', tsal)
+    if extinf_values:
+        max_dur = max(float(v) for v in extinf_values)
+        new_target = int(max_dur) + 1
+        tsal = re.sub(r'#EXT-X-TARGETDURATION:\d+', f'#EXT-X-TARGETDURATION:{new_target}', tsal)
+
+    lines = tsal.split('\n')
+    result = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            full = stripped if stripped.startswith('http') else base_source + stripped
+            encoded = quote(full, safe='')
+            result.append(WORKERS + '/ott-seg/' + encoded + '.avif')
+        else:
+            result.append(stripped)
+    return '\n'.join(result)
+
+
+@app.route('/ott/<videoid>.m3u8')
+@app.route('/ott/<videoid>')
+def ott(videoid):
     try:
         m3u8_url = get_m3u8_url(videoid)
         if not m3u8_url:
             return "Veri yok", 404
         ts = requests.get(m3u8_url, headers=HEADERS, timeout=10)
-        base_source = re.sub(r'[^/]+\.m3u8.*', '', m3u8_url)
-        lines = ts.text.split('\n')
-        result = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped and not stripped.startswith('#'):
-                full = stripped if stripped.startswith('http') else base_source + stripped
-                encoded = quote(full, safe='')
-                result.append(BASE + '/fluseg/' + encoded)
-            else:
-                result.append(stripped)
-        return Response('\n'.join(result), content_type='application/vnd.apple.mpegurl')
+        tsal = fix_m3u8(ts.text, videoid, m3u8_url)
+        return Response(tsal, content_type='application/vnd.apple.mpegurl')
     except Exception as e:
         return str(e), 500
 
 
-@app.route('/fluseg/<path:encoded>')
-def fluseg(encoded):
+@app.route('/ott-seg/<path:encoded>')
+def ott_seg(encoded):
+    if encoded.endswith('.avif'):
+        encoded = encoded[:-5]
     source = unquote(encoded)
     try:
         ts = requests.get(source, headers=HEADERS, timeout=10)

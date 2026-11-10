@@ -1,1 +1,1 @@
-web: gunicorn app:app --timeout 30 --worker-class gevent --workers 3 --threads 2
+gunicorn --worker-class gthread --workers 1 --threads 16 --bind 0.0.0.0:${PORT:-8080} app:app

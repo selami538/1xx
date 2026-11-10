@@ -521,10 +521,12 @@ def m3u8_response(content):
     return response
 
 
-def segment_response(content):
+def segment_response(content, is_avif=False):
     response = Response(
         content,
-        content_type="video/mp2t"
+        content_type=(
+            "image/avif" if is_avif else "video/mp2t"
+        )
     )
 
     response.headers["Content-Length"] = str(
@@ -627,7 +629,8 @@ def ott(videoid):
 
 @app.route("/seg/<videoid>/<path:filename>")
 def seg(videoid, filename):
-    if filename.endswith(".avif"):
+    is_avif = filename.endswith(".avif")
+    if is_avif:
         filename = filename[:-5] + ".ts"
 
     if (
@@ -680,7 +683,8 @@ def seg(videoid, filename):
         )
 
     return segment_response(
-        content
+        content,
+        is_avif=is_avif
     )
 
 

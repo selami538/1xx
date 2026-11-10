@@ -1,5 +1,7 @@
-Flask>=3.1,<4
-gunicorn>=23,<26
-requests>=2.32,<3
-flask-cors>=5,<7
-packaging>=24
+Flask
+gunicorn
+gevent>=24.10.1
+requests
+regex
+flask-cors
+packaging

@@ -138,7 +138,7 @@ threading.Thread(target=janitor, daemon=True).start()
 # ───────────── Kaynak islemleri ─────────────
 def get_m3u8_url(videoid):
     veriler = {"AppId": "3", "AppVer": "1025", "VpcVer": "1.0.11", "Language": "tr", "Token": "", "VideoId": videoid}
-    r = session.post("https://1xlite-26316.pro/cinema", json=veriler, timeout=10)
+    r = session.post("https://1xlite-6938.pro/cinema", json=veriler, timeout=10)
     if "FullscreenAllowed" not in r.text:
         return None
     veri = re.findall('"URL":"(.*?)"', r.text)

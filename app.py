@@ -5,6 +5,7 @@ import time
 import math
 import threading
 import logging
+
 from collections import OrderedDict
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -17,6 +18,14 @@ CORS(app)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ───────────── Kaynak ayarlari ─────────────
+
+API_URL = "https://1xlite-6938.pro/cinema"
+
+FORCE_EDGE = "edge3.xmediaget.com"
+
+WORKERS = "https://ts.yedeklinksa35.workers.dev"
 
 HEADERS = {
     "accept": "*/*",
@@ -31,18 +40,18 @@ HEADERS = {
     )
 }
 
-WORKERS = "https://lionfish-app-kmrcp.ondigitalocean.app"
+# ───────────── Cache ayarlari ─────────────
 
-# Cache ayarlari
 M3U8_TTL = 1.5
 M3U8_STALE_MAX = 15
+
 SEG_TTL = 60
 SEG_MAX_BYTES = 150 * 1024 * 1024
+
 TOKEN_TTL = 20
 
 REQUEST_TIMEOUT = (5, 10)
 
-# Thread-local HTTP session
 LOCAL = threading.local()
 
 
@@ -52,7 +61,52 @@ def get_session():
     return LOCAL.session
 
 
-# Single-flight
+# ───────────── Edge3 sabitleme ─────────────
+
+def force_edge3(url):
+    """
+    edge1, edge2, edge6 vb. kaynak adreslerini
+    edge3.xmediaget.com olarak degistirir.
+    """
+
+    if not url:
+        return url
+
+    url = url.replace("\\/", "/")
+    url = url.replace(":43434", "")
+
+    parsed = urlsplit(url)
+
+    hostname = parsed.hostname or ""
+
+    if re.fullmatch(
+        r"edge\d+\.xmediaget\.com",
+        hostname,
+        flags=re.IGNORECASE
+    ):
+        netloc = FORCE_EDGE
+
+        if parsed.username or parsed.password:
+            raise ValueError(
+                "Beklenmeyen kaynak URL bilgisi"
+            )
+
+        if parsed.port and parsed.port != 43434:
+            netloc += ":" + str(parsed.port)
+
+        url = urlunsplit((
+            parsed.scheme,
+            netloc,
+            parsed.path,
+            parsed.query,
+            parsed.fragment
+        ))
+
+    return url
+
+
+# ───────────── Single-flight ─────────────
+
 class SingleFlight:
     def __init__(self):
         self.lock = threading.Lock()
@@ -68,6 +122,7 @@ class SingleFlight:
                     "result": None,
                     "error": None
                 }
+
                 self.calls[key] = call
                 leader = True
             else:
@@ -76,12 +131,16 @@ class SingleFlight:
         if leader:
             try:
                 call["result"] = fn()
+
             except Exception as exc:
                 call["error"] = exc
+
             finally:
                 call["event"].set()
+
                 with self.lock:
                     self.calls.pop(key, None)
+
         else:
             if not call["event"].wait(timeout=25):
                 raise TimeoutError(
@@ -97,11 +156,13 @@ class SingleFlight:
 flight = SingleFlight()
 
 
-# Segment cache
+# ───────────── Segment cache ─────────────
+
 class SegmentCache:
     def __init__(self, max_bytes, ttl):
         self.max_bytes = max_bytes
         self.ttl = ttl
+
         self.size = 0
         self.data = OrderedDict()
         self.lock = threading.Lock()
@@ -142,12 +203,14 @@ class SegmentCache:
                 time.monotonic() + self.ttl,
                 content
             )
+
             self.size += len(content)
 
             while self.size > self.max_bytes and self.data:
                 _, (_, removed) = self.data.popitem(
                     last=False
                 )
+
                 self.size -= len(removed)
 
     def cleanup(self):
@@ -155,7 +218,8 @@ class SegmentCache:
 
         with self.lock:
             expired = [
-                key for key, value in self.data.items()
+                key
+                for key, value in self.data.items()
                 if value[0] <= now
             ]
 
@@ -171,14 +235,18 @@ SEG_CACHE = SegmentCache(
 
 M3U8_CACHE = {}
 TOKEN_CACHE = {}
+
 CACHE_LOCK = threading.Lock()
 
+
+# ───────────── Cache temizleyici ─────────────
 
 def janitor():
     while True:
         time.sleep(30)
 
         SEG_CACHE.cleanup()
+
         now = time.monotonic()
 
         with CACHE_LOCK:
@@ -197,7 +265,8 @@ threading.Thread(
 ).start()
 
 
-# Kaynak URL
+# ───────────── Kaynak URL alma ─────────────
+
 def get_m3u8_url(videoid):
     payload = {
         "AppId": "3",
@@ -209,27 +278,28 @@ def get_m3u8_url(videoid):
     }
 
     response = get_session().post(
-        "https://1xlite-6938.pro/cinema",
+        API_URL,
         json=payload,
         timeout=REQUEST_TIMEOUT
     )
 
     response.raise_for_status()
 
-    try:
-        data = response.json()
-        raw_text = response.text
-    except ValueError:
-        data = None
-        raw_text = response.text
+    raw_text = response.text
 
     if "FullscreenAllowed" not in raw_text:
         return None
 
     url = None
 
-    if isinstance(data, dict):
-        url = data.get("URL")
+    try:
+        data = response.json()
+
+        if isinstance(data, dict):
+            url = data.get("URL")
+
+    except ValueError:
+        pass
 
     if not url:
         matches = re.findall(
@@ -243,16 +313,28 @@ def get_m3u8_url(videoid):
     if not url:
         return None
 
-    url = url.replace(":43434", "")
+    # EDGE3 ZORUNLU
+    url = force_edge3(url)
 
     if ".m3u8" not in url:
         return None
 
-    if urlsplit(url).scheme not in ("http", "https"):
+    if urlsplit(url).scheme not in (
+        "http",
+        "https"
+    ):
         return None
+
+    logger.info(
+        "Video %s icin kaynak host: %s",
+        videoid,
+        urlsplit(url).hostname
+    )
 
     return url
 
+
+# ───────────── M3U8 olusturma ─────────────
 
 def _build_m3u8(videoid):
     m3u8_url = get_m3u8_url(videoid)
@@ -271,7 +353,9 @@ def _build_m3u8(videoid):
     playlist = response.text
 
     if "#EXTM3U" not in playlist:
-        raise ValueError("Gecersiz M3U8 verisi")
+        raise ValueError(
+            "Gecersiz M3U8 verisi"
+        )
 
     parsed = urlsplit(m3u8_url)
 
@@ -299,7 +383,8 @@ def _build_m3u8(videoid):
 
     if durations:
         max_duration = max(
-            float(value) for value in durations
+            float(value)
+            for value in durations
         )
 
         target = math.ceil(max_duration)
@@ -328,8 +413,14 @@ def _build_m3u8(videoid):
             stripped
         )
 
-        segment_path = urlsplit(segment_url).path
-        filename = segment_path.rsplit("/", 1)[-1]
+        segment_path = urlsplit(
+            segment_url
+        ).path
+
+        filename = segment_path.rsplit(
+            "/",
+            1
+        )[-1]
 
         if filename.endswith(".ts"):
             filename = filename[:-3] + ".avif"
@@ -347,6 +438,8 @@ def build_m3u8(videoid):
         lambda: _build_m3u8(videoid)
     )
 
+
+# ───────────── Token islemleri ─────────────
 
 def get_token(videoid, force=False):
     with CACHE_LOCK:
@@ -366,7 +459,13 @@ def get_token(videoid, force=False):
     return info
 
 
-def fetch_segment(videoid, filename, force_token=False):
+# ───────────── Segment indirme ─────────────
+
+def fetch_segment(
+    videoid,
+    filename,
+    force_token=False
+):
     info = get_token(
         videoid,
         force=force_token
@@ -383,14 +482,20 @@ def fetch_segment(videoid, filename, force_token=False):
     if info["query"]:
         source += "?" + info["query"]
 
+    # Segment kaynagi da edge3 olsun
+    source = force_edge3(source)
+
     response = get_session().get(
         source,
         headers=HEADERS,
         timeout=REQUEST_TIMEOUT
     )
 
-    # Token hatasi ise yeniden denenebilir
-    if response.status_code in (401, 403, 404):
+    if response.status_code in (
+        401,
+        403,
+        404
+    ):
         return None
 
     response.raise_for_status()
@@ -401,7 +506,8 @@ def fetch_segment(videoid, filename, force_token=False):
     return response.content
 
 
-# Responses
+# ───────────── HTTP response ─────────────
+
 def m3u8_response(content):
     response = Response(
         content,
@@ -429,17 +535,21 @@ def segment_response(content):
         "public, max-age=60"
     )
 
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers[
+        "Access-Control-Allow-Origin"
+    ] = "*"
 
     return response
 
 
-# Health check
+# ───────────── Health check ─────────────
+
 @app.route("/health")
 def health():
     return {
         "status": "ok",
-        "service": "hls-proxy"
+        "service": "hls-proxy",
+        "edge": FORCE_EDGE
     }, 200
 
 
@@ -447,11 +557,13 @@ def health():
 def index():
     return {
         "status": "running",
-        "service": "hls-proxy"
+        "service": "hls-proxy",
+        "edge": FORCE_EDGE
     }, 200
 
 
-# Playlist
+# ───────────── Playlist route ─────────────
+
 @app.route("/ott/<videoid>.m3u8")
 @app.route("/ott/<videoid>")
 def ott(videoid):
@@ -460,8 +572,13 @@ def ott(videoid):
     with CACHE_LOCK:
         cached = M3U8_CACHE.get(videoid)
 
-    if cached and now - cached[0] < M3U8_TTL:
-        return m3u8_response(cached[1])
+    if (
+        cached
+        and now - cached[0] < M3U8_TTL
+    ):
+        return m3u8_response(
+            cached[1]
+        )
 
     try:
         playlist = build_m3u8(videoid)
@@ -472,7 +589,9 @@ def ott(videoid):
                 and time.monotonic() - cached[0]
                 < M3U8_STALE_MAX
             ):
-                return m3u8_response(cached[1])
+                return m3u8_response(
+                    cached[1]
+                )
 
             return "Veri yok", 404
 
@@ -482,7 +601,9 @@ def ott(videoid):
                 playlist
             )
 
-        return m3u8_response(playlist)
+        return m3u8_response(
+            playlist
+        )
 
     except Exception:
         logger.exception(
@@ -495,12 +616,15 @@ def ott(videoid):
             and time.monotonic() - cached[0]
             < M3U8_STALE_MAX
         ):
-            return m3u8_response(cached[1])
+            return m3u8_response(
+                cached[1]
+            )
 
         return "Kaynak hatasi", 502
 
 
-# Segment
+# ───────────── Segment route ─────────────
+
 @app.route("/seg/<videoid>/<path:filename>")
 def seg(videoid, filename):
     if filename.endswith(".avif"):
@@ -544,18 +668,31 @@ def seg(videoid, filename):
                 "Segment hatasi: %s",
                 key
             )
+
             return "Kaynak hatasi", 502
 
         if not content:
             return "Veri yok", 404
 
-        SEG_CACHE.put(key, content)
+        SEG_CACHE.put(
+            key,
+            content
+        )
 
-    return segment_response(content)
+    return segment_response(
+        content
+    )
 
+
+# ───────────── DigitalOcean start ─────────────
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8080"))
+    port = int(
+        os.environ.get(
+            "PORT",
+            "8080"
+        )
+    )
 
     app.run(
         host="0.0.0.0",

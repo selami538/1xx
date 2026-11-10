@@ -4,4 +4,4 @@ gevent
 requests
 regex
 flask_cors
-asyncio
+packaging

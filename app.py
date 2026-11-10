@@ -31,7 +31,7 @@ HEADERS = {
     )
 }
 
-WORKERS = "https://ts.yedeklinksa35.workers.dev"
+WORKERS = "https://lionfish-app-kmrcp.ondigitalocean.app"
 
 # Cache ayarlari
 M3U8_TTL = 1.5

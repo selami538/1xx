@@ -25,7 +25,7 @@ API_URL = "https://1xlite-6938.pro/cinema"
 
 FORCE_EDGE = "edge3.xmediaget.com"
 
-WORKERS = "https://lionfish-app-kmrcp.ondigitalocean.app"
+WORKERS = "https://arda.ardasportv.top"
 
 HEADERS = {
     "accept": "*/*",
